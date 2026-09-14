@@ -1,0 +1,71 @@
+# Secret scanning — free replacement for GitHub's paid push protection.
+#
+# Scan scope is decided by gitleaks-action from the event:
+#   push / pull_request      -> only the commits in that push or PR  (blocking: the job fails on a leak)
+#   schedule / manual run    -> the FULL repository history          (use this to establish a baseline)
+#
+# The triggers are deliberately narrow. Commits on a feature branch are already
+# covered by the pull_request event, so pushes are scanned only on the long-lived
+# branches, where a commit can land without a PR. Listening to every branch on top
+# of that scanned the same commits up to three times per change — feature push,
+# PR, then the merge commit on main.
+#
+# Requires the organization secret GITLEAKS_LICENSE. The key is free for organizations —
+# request it at https://gitleaks.io — and must be visible to all repositories.
+name: Secret scan
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+      - staging
+      - release
+      - 'prod/**'
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
+
+# A newer push to the same pull request makes the run in flight pointless. Push runs
+# are never cancelled: each one scans only its own commit range, so a cancelled push
+# run would leave those commits unscanned.
+concurrency:
+  group: secret-scan-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    # Dependabot runs are given the Dependabot secrets store only, so
+    # GITLEAKS_LICENSE resolves to an empty string and the licence check below
+    # fails the job. Dependabot only rewrites package.json and the lockfile —
+    # there is nothing there for a secret scan to find.
+    if: github.actor != 'dependabot[bot]'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check that the organization licence secret is present
+        env:
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+        run: |
+          if [ -z "$GITLEAKS_LICENSE" ]; then
+            echo "::error title=Missing GITLEAKS_LICENSE::gitleaks-action requires a licence key for organization accounts. Get the free key at https://gitleaks.io, then add it as an organization secret named GITLEAKS_LICENSE with visibility set to all repositories."
+            exit 1
+          fi
+
+      - uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_ENABLE_COMMENTS: true
+          GITLEAKS_ENABLE_SUMMARY: true
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true
