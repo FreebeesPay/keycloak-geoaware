@@ -13,6 +13,10 @@ jobs:
   test-coverage:
     runs-on: ubuntu-latest
     continue-on-error: false
+    env:
+      # Declared at job level so the reporting step can gate on it: the secrets
+      # context is not available in a step `if`, the env context is.
+      DEEPSOURCE_DSN: ${{ secrets.DEEPSOURCE_DSN }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -39,9 +43,11 @@ jobs:
           MAXMIND_LICENSE_KEY: ${{ secrets.MAXMIND_LICENSE_KEY }}
           IPINFO_TOKEN: ${{ secrets.IPINFO_TOKEN }}
 
+      # Coverage is reported to upstream's DeepSource project. This fork has no DSN,
+      # and the CLI exits 1 on an empty one, failing the job after a green build.
+      # Set DEEPSOURCE_DSN as a repository secret and the step reports again.
       - name: Report results to DeepSource
+        if: env.DEEPSOURCE_DSN != ''
         run: |
           curl https://deepsource.io/cli | sh
           ./bin/deepsource report --analyzer test-coverage --key java --value-file integration-test/target/site/jacoco-aggregate/jacoco.xml
-        env:
-          DEEPSOURCE_DSN: ${{ secrets.DEEPSOURCE_DSN }}
